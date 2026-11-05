@@ -1,0 +1,50 @@
+name: VIDLOOP YouTube Live
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Start a fresh session every 6 hours (UTC).
+    - cron: "0 */6 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vidloop-live
+  cancel-in-progress: false
+
+jobs:
+  stream:
+    runs-on: ubuntu-latest
+    # Leave a small gap before GitHub's six-hour job limit.
+    timeout-minutes: 350
+
+    steps:
+      - name: Check out VIDLOOP
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Check video and stream key
+        env:
+          YT_STREAM_KEY: ${{ secrets.YT_STREAM_KEY }}
+        run: |
+          test -s video.mp4 || { echo "video.mp4 is missing or empty"; exit 1; }
+          test -n "$YT_STREAM_KEY" || { echo "YT_STREAM_KEY secret is missing"; exit 1; }
+          ffprobe -v error -show_entries stream=codec_type -of csv=p=0 video.mp4
+
+      - name: Loop video to YouTube Live
+        env:
+          YT_STREAM_KEY: ${{ secrets.YT_STREAM_KEY }}
+        run: |
+          set -o pipefail
+          ffmpeg -hide_banner -loglevel info \
+            -stream_loop -1 -re -i video.mp4 \
+            -map 0:v:0 -map '0:a?' \
+            -c:v libx264 -preset veryfast -pix_fmt yuv420p \
+            -r 30 -g 60 -b:v 4500k -maxrate 4500k -bufsize 9000k \
+            -c:a aac -b:a 128k -ar 44100 \
+            -f flv "rtmp://a.rtmp.youtube.com/live2/${YT_STREAM_KEY}"
